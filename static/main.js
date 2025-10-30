@@ -105,10 +105,19 @@ const candlestickSeries = chart.addSeries(
       wickDownColor: '#ef5350',
     }
 );
-const emaLine = chart.addSeries(
+
+// Add SMA lines
+const sma5Line = chart.addSeries(
     LightweightCharts.LineSeries,
-    { color: 'blue', lineWidth: 2 }
+    { color: 'blue', lineWidth: 2, title: 'SMA 5',  priceLineVisible: false, smooth: true  }
 );
+
+const sma20Line = chart.addSeries(
+    LightweightCharts.LineSeries,
+    { color: 'yellow', lineWidth: 2, title: 'SMA 20',  priceLineVisible: false, smooth: true  }
+);
+
+
 
 const rsiChart = LightweightCharts.createChart(document.getElementById('rsiChart'),chartOptions2);
 const rsiLine = rsiChart.addSeries(
@@ -118,14 +127,23 @@ const rsiLine = rsiChart.addSeries(
 
 let autoUpdateInterval;
 
+
 // Fetch data function
-function fetchData(ticker, timeframe, emaPeriod, rsiPeriod) {
-    fetch(`/api/data/${ticker}/${timeframe}/${emaPeriod}/${rsiPeriod}`)
+function fetchData(ticker, timeframe, rsiPeriod) {
+    fetch(`/api/data/${ticker}/${timeframe}/${rsiPeriod}`)
         .then(response => response.json())
         .then(data => {
             candlestickSeries.setData(data.candlestick);
-            emaLine.setData(data.ema);
             rsiLine.setData(data.rsi);
+            // Set SMA data
+            sma5Line.setData(data.sma5);
+            sma20Line.setData(data.sma20);
+      
+
+
+
+
+
 
             
         })
@@ -144,9 +162,8 @@ window.addEventListener('load', () => {
 document.getElementById('fetchData').addEventListener('click', () => {
     const ticker = document.getElementById('ticker').value;
     const timeframe = document.getElementById('timeframe').value;
-    const emaPeriod = document.getElementById('emaPeriod').value;
     const rsiPeriod = document.getElementById('rsiPeriod').value;
-    fetchData(ticker, timeframe, emaPeriod, rsiPeriod);
+    fetchData(ticker, timeframe, rsiPeriod);
 });
 
 // Handle auto-update functionality
@@ -156,9 +173,8 @@ document.getElementById('autoUpdate').addEventListener('change', (event) => {
         autoUpdateInterval = setInterval(() => {
             const ticker = document.getElementById('ticker').value;
             const timeframe = document.getElementById('timeframe').value;
-            const emaPeriod = document.getElementById('emaPeriod').value;
             const rsiPeriod = document.getElementById('rsiPeriod').value;
-            fetchData(ticker, timeframe, emaPeriod, rsiPeriod);
+            fetchData(ticker, timeframe, rsiPeriod);
         }, frequency);
     } else {
         clearInterval(autoUpdateInterval);
@@ -384,7 +400,7 @@ function loadWatchlist() {
                     });
                     item.classList.add('border-primary', 'border');
                     
-                    fetchData(symbolData.symbol, document.getElementById('timeframe').value, document.getElementById('emaPeriod').value, document.getElementById('rsiPeriod').value);
+                    fetchData(symbolData.symbol, document.getElementById('timeframe').value, document.getElementById('rsiPeriod').value);
                 });
                 
                 watchlistItems.appendChild(item);
@@ -450,6 +466,44 @@ function syncCrosshair(chart, series, dataPoint) {
     }
     chart.clearCrosshairPosition();
 }
+
+// === Hover legend for candle + SMA values ===
+const legend = document.createElement('div');
+legend.style.position = 'absolute';
+legend.style.left = '12px';
+legend.style.top = '12px';
+legend.style.zIndex = 10;
+legend.style.color = isDarkMode ? '#f3f4f6' : '#111827';
+legend.style.fontFamily = 'Inter, sans-serif';
+legend.style.fontSize = '12px';
+legend.style.backgroundColor = isDarkMode ? 'rgba(17,24,39,0.8)' : 'rgba(255,255,255,0.8)';
+legend.style.padding = '6px 10px';
+legend.style.borderRadius = '8px';
+legend.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
+legend.innerHTML = 'Hover a candle…';
+document.getElementById('chart').appendChild(legend);
+
+chart.subscribeCrosshairMove(param => {
+    if (!param.time) {
+        legend.innerHTML = 'Hover a candle…';
+        return;
+    }
+
+    const candle = param.seriesData.get(candlestickSeries);
+    const sma5 = param.seriesData.get(sma5Line);
+    const sma20 = param.seriesData.get(sma20Line);
+
+    if (candle) {
+        legend.innerHTML = `
+            <b>${new Date(param.time * 1000).toLocaleDateString()}</b><br>
+            O: ${candle.open?.toFixed(2)} &nbsp; H: ${candle.high?.toFixed(2)}<br>
+            L: ${candle.low?.toFixed(2)} &nbsp; C: ${candle.close?.toFixed(2)}<br>
+            <span style="color:blue">SMA 5:</span> ${sma5?.value?.toFixed(2) ?? '–'} &nbsp;
+            <span style="color:gold">SMA 20:</span> ${sma20?.value?.toFixed(2) ?? '–'}
+        `;
+    }
+});
+
 
 chart.subscribeCrosshairMove(param => {
     const dataPoint = getCrosshairDataPoint(candlestickSeries, param);

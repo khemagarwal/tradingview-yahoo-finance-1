@@ -17,14 +17,14 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Initialize database
 db.init_app(app)
 
-def fetch_yahoo_data(ticker, interval, ema_period=20, rsi_period=14):
+def fetch_yahoo_data(ticker, interval, rsi_period=14):
     ticker = yf.Ticker(ticker)
 
     end_date = datetime.now()
     if interval in ['1m', '5m']:
         start_date = end_date - timedelta(days=7)
     elif interval in ['15m', '60m']:
-        start_date = end_date - timedelta(days=60)
+        start_date = end_date - timedelta(days=59)
     elif interval == '1d':
         start_date = end_date - timedelta(days=365*5)
     elif interval == '1wk':
@@ -33,8 +33,21 @@ def fetch_yahoo_data(ticker, interval, ema_period=20, rsi_period=14):
         start_date = end_date - timedelta(days=365*5)
 
     data = ticker.history(start=start_date, end=end_date, interval=interval)
-    data['EMA'] = ta.ema(data['Close'], length=ema_period)
+    data['SMA_5'] = ta.sma(data['Close'], length=5)
+    data['SMA_20'] = ta.sma(data['Close'], length=20)
     data['RSI'] = ta.rsi(data['Close'], length=rsi_period)
+
+        # ---- Detect SMA crossovers ----
+    data['Signal'] = None
+    for i in range(1, len(data)):
+        prev5, prev20 = data['SMA_5'].iloc[i - 1], data['SMA_20'].iloc[i - 1]
+        curr5, curr20 = data['SMA_5'].iloc[i], data['SMA_20'].iloc[i]
+
+        if pd.notna(prev5) and pd.notna(prev20):
+            if prev5 < prev20 and curr5 > curr20:
+                data.iloc[i, data.columns.get_loc('Signal')] = 'BUY'
+            elif prev5 > prev20 and curr5 < curr20:
+                data.iloc[i, data.columns.get_loc('Signal')] = 'SELL'
 
     candlestick_data = [
         {
@@ -47,13 +60,22 @@ def fetch_yahoo_data(ticker, interval, ema_period=20, rsi_period=14):
         for row in data.itertuples()
     ]
 
-    ema_data = [
+    sma5_data = [
         {
             'time': int(row.Index.timestamp()),
-            'value': row.EMA
+            'value': row.SMA_5
         }
-        for row in data.itertuples() if not pd.isna(row.EMA)
+        for row in data.itertuples() if not pd.isna(row.SMA_5)
     ]
+
+    sma20_data = [
+        {
+            'time': int(row.Index.timestamp()),
+            'value': row.SMA_20
+        }
+        for row in data.itertuples() if not pd.isna(row.SMA_20)
+    ]
+
 
     rsi_data = [
         {
@@ -63,16 +85,45 @@ def fetch_yahoo_data(ticker, interval, ema_period=20, rsi_period=14):
         for row in data.itertuples()
     ]
 
-    return candlestick_data, ema_data, rsi_data
+    
+    # ---- Markers for BUY/SELL ----
+    signal_markers = []
+    for row in data.itertuples():
+        if row.Signal == 'BUY':
+            signal_markers.append({
+                'time': int(row.Index.timestamp()),
+                'position': 'belowBar',
+                'color': 'green',
+                'shape': 'arrowUp',
+                'text': 'BUY'
+            })
+        elif row.Signal == 'SELL':
+            signal_markers.append({
+                'time': int(row.Index.timestamp()),
+                'position': 'aboveBar',
+                'color': 'red',
+                'shape': 'arrowDown',
+                'text': 'SELL'
+            })
+
+    return candlestick_data, sma5_data, sma20_data, rsi_data, signal_markers
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/api/data/<ticker>/<interval>/<int:ema_period>/<int:rsi_period>')
-def get_data(ticker, interval, ema_period, rsi_period):
-    candlestick_data, ema_data, rsi_data = fetch_yahoo_data(ticker, interval, ema_period, rsi_period)
-    return jsonify({'candlestick': candlestick_data, 'ema': ema_data, 'rsi': rsi_data})
+@app.route('/api/data/<ticker>/<interval>/<int:rsi_period>')
+def get_data(ticker, interval, rsi_period):
+    candlestick_data, sma5_data, sma20_data, rsi_data, signal_markers = fetch_yahoo_data(ticker, interval, rsi_period=rsi_period)
+    return jsonify({
+        'candlestick': candlestick_data,
+        'sma5': sma5_data,
+        'sma20': sma20_data,
+        'rsi': rsi_data,
+        'signals': signal_markers
+    })
+
+
 
 # Create database tables on startup if they don't exist
 with app.app_context():
