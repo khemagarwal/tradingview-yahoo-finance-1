@@ -329,6 +329,9 @@ function loadWatchlist() {
             addSymbol();
         }
     });
+
+
+
     
     // Show loading state in the watchlist items
     watchlistItems.innerHTML = `
@@ -337,11 +340,47 @@ function loadWatchlist() {
             <span class="ml-2">Loading quotes...</span>
         </div>
     `;
+
+  
     
     fetch('/api/symbols')
         .then(response => response.json())
         .then(symbolsData => {
             watchlistItems.innerHTML = '';
+
+                    // ---- Add static NIFTY option at the top ----
+            const niftyItem = document.createElement('div');
+            niftyItem.className = 'card bg-base-100 hover:bg-base-200 shadow-sm hover:shadow cursor-pointer transition-all group relative';
+            niftyItem.innerHTML = `
+                <div class="card-body p-3">
+                    <div class="flex justify-between items-center">
+                        <div>
+                            <h3 class="font-bold">NIFTY 26000 NOV 4 CE</h3>
+                            <div class="text-xs opacity-70 truncate max-w-32">NSE Option</div>
+                        </div>
+                        <div class="text-right">
+                            <div class="font-medium">—</div>
+                            <div class="text-xs text-gray-500"><i class="fas fa-chart-line mr-1"></i>Live</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            niftyItem.addEventListener('click', () => {
+                document.getElementById('ticker').value = 'NIFTY OPTION';
+                document.querySelectorAll('.card.border-primary').forEach(el => el.classList.remove('border-primary', 'border'));
+                niftyItem.classList.add('border-primary', 'border');
+                fetch('/api/nifty_option')
+                    .then(response => response.json())
+                    .then(data => {
+                        candlestickSeries.setData(data.candlestick);
+                        sma5Line.setData(data.sma5);
+                        sma20Line.setData(data.sma20);
+                        rsiLine.setData(data.rsi);
+                    })
+                    .catch(err => console.error('Error fetching NIFTY option data:', err));
+            });
+            watchlistItems.appendChild(niftyItem);
+            // ---- End NIFTY option section ----
             
             if (symbolsData.length === 0) {
                 const emptyState = document.createElement('div');

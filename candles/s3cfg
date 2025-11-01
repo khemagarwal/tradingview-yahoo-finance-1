@@ -1,0 +1,6 @@
+[default]
+access_key = 5c8ea9c516abfc78987bc98c70d2868a
+secret_key = 0cf64f9f0b64f6008cf5efe1529c6772daa7d7d0822f5db42a7c6a1e41b3cadf
+host_base = cbabd13f6c54798a9ec05df5b8070a6e.r2.cloudflarestorage.com
+host_bucket = %(bucket)s.cbabd13f6c54798a9ec05df5b8070a6e.r2.cloudflarestorage.com
+use_https = True
