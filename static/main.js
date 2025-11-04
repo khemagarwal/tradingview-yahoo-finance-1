@@ -49,6 +49,8 @@ const chartOptions2 = {
 // === Create charts ===
 const chartEl = document.getElementById('chart');
 const chart = LightweightCharts.createChart(chartEl, chartOptions1);
+
+// keep your existing series creation (you said changing it breaks other functionality)
 const candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
     upColor: '#26a69a',
     downColor: '#ef5350',
@@ -60,7 +62,30 @@ const sma5Line = chart.addSeries(LightweightCharts.LineSeries, { color: 'blue', 
 const sma20Line = chart.addSeries(LightweightCharts.LineSeries, { color: 'gold', lineWidth: 2 });
 
 const rsiChart = LightweightCharts.createChart(document.getElementById('rsiChart'), chartOptions2);
-const rsiLine = rsiChart.addSeries(LightweightCharts.LineSeries, { color: 'red', lineWidth: 2 });
+const rsiLine = rsiChart.addSeries(LightweightCharts.LineSeries, { color: 'green', lineWidth: 2 });
+const rsiAvgLine = rsiChart.addSeries(LightweightCharts.LineSeries, { color: 'red', lineWidth: 2 });
+
+// ------------------ MARKERS PLUGIN SETUP (v5 approach) ------------------
+// Try to create a series markers plugin using the v5 API exposed on the standalone bundle.
+// If it's available, we will use its setMarkers() method. If not, we fall back to
+// candlestickSeries.setMarkers (older API) and finally warn if neither is available.
+
+let seriesMarkersApi = null;
+if (typeof LightweightCharts.createSeriesMarkers === 'function') {
+    try {
+        // create an empty markers plugin instance attached to our candlestick series
+        seriesMarkersApi = LightweightCharts.createSeriesMarkers(candlestickSeries, []);
+        // seriesMarkersApi has setMarkers([...]) and markers() methods per docs
+    } catch (err) {
+        console.warn('createSeriesMarkers exists but failed to create plugin:', err);
+        seriesMarkersApi = null;
+    }
+} else {
+    // no createSeriesMarkers available in this build
+    seriesMarkersApi = null;
+}
+
+// ------------------ END MARKERS PLUGIN SETUP ------------------
 
 // === Bounded Zoom Logic ===
 const timeScale = chart.timeScale();
@@ -107,24 +132,68 @@ window.addEventListener('resize', () => {
     rsiChart.applyOptions({ width: document.getElementById('rsiChart').clientWidth });
 });
 
+// === Helper: set markers in a version-robust way ===
+function setSeriesMarkers(markersArray) {
+    // markersArray expected shape: [{ time: 1670000000, position: 'aboveBar', color: 'green', shape: 'arrowUp', text: 'Buy' }, ...]
+    if (seriesMarkersApi && typeof seriesMarkersApi.setMarkers === 'function') {
+        // v5 plugin API: setMarkers accepts series marker objects
+        try {
+            seriesMarkersApi.setMarkers(markersArray);
+            return;
+        } catch (err) {
+            console.warn('seriesMarkersApi.setMarkers failed:', err);
+        }
+    }
+
+    // fallback: some builds offer a series.setMarkers API (older)
+    if (typeof candlestickSeries.setMarkers === 'function') {
+        try {
+            candlestickSeries.setMarkers(markersArray);
+            return;
+        } catch (err) {
+            console.warn('candlestickSeries.setMarkers failed:', err);
+        }
+    }
+
+    console.warn('No supported markers API found (createSeriesMarkers / series.setMarkers). Markers were not set.');
+}
+
 // === Load NIFTY data ===
 async function loadNiftyData(before = null, append = false) {
     const interval = document.getElementById('intervalSelect')?.value || '1m';
-    let url = `/api/data/nifty?interval=${interval}`;
+    const rsiPeriod = document.getElementById('rsiPeriod')?.value || 9;
+    const rsiAvg = document.getElementById('rsiAvg')?.value || 3;
+    let url = `/api/data/nifty?interval=${interval}&rsi_period=${rsiPeriod}&rsi_avg=${rsiAvg}`;
     if (before) url += `&before=${before}&limit=1000`;
 
     const resp = await fetch(url);
     const data = await resp.json();
 
+    // Build a markers array compatible with the docs:
+    // v5 expects time to be a timestamp (number) or time object; here backend sends epoch seconds
+    const markers = (data.signals || []).map(sig => {
+        // createSeriesMarkers accepts either { time: 1670000000 } or { time: { year, month, day } }.
+        // We keep epoch seconds (number) — the docs/typings accept numeric times as well.
+        // Keep position, color, shape, text fields as-is.
+        return {
+            time: sig.time,
+            position: sig.position || 'aboveBar',
+            color: sig.color || (sig.text && sig.text.toLowerCase().includes('buy') ? 'green' : 'red'),
+            shape: sig.shape || (sig.text && sig.text.toLowerCase().includes('buy') ? 'arrowUp' : 'arrowDown'),
+            text: sig.text || ''
+        };
+    });
 
     if (!append) {
-        // Initial load
         candlestickSeries.setData(data.candlestick);
         sma5Line.setData(data.sma5);
         sma20Line.setData(data.sma20);
-        rsiLine.setData(data.rsi);
+        rsiLine.setData(data.rsi_base);
+        rsiAvgLine.setData(data.rsi_avg);
+
+        // set markers robustly
+        setSeriesMarkers(markers);
     } else {
-        // Append older data while preserving continuity
         const mergeData = (oldData, newData) => {
             const combined = [...newData, ...oldData];
             const seen = new Set();
@@ -134,14 +203,16 @@ async function loadNiftyData(before = null, append = false) {
                 return true;
             });
         };
-
         candlestickSeries.setData(mergeData(candlestickSeries.data(), data.candlestick));
         sma5Line.setData(mergeData(sma5Line.data(), data.sma5));
         sma20Line.setData(mergeData(sma20Line.data(), data.sma20));
-        rsiLine.setData(mergeData(rsiLine.data(), data.rsi));
+        rsiLine.setData(mergeData(rsiLine.data(), data.rsi_base));
+        rsiAvgLine.setData(mergeData(rsiAvgLine.data(), data.rsi_avg));
+
+        // update markers too
+        setSeriesMarkers(markers);
     }
 }
-
 
 // === Lazy load older data ===
 let isLoading = false;
@@ -186,6 +257,11 @@ function syncVisibleLogicalRange(chart1, chart2) {
 syncVisibleLogicalRange(chart, rsiChart);
 
 // === Hover legend ===
+// ... keep your existing legend code unchanged (not repeated here to avoid clutter)
+// If you want, I can paste it back into this file — but I left it as-is per your last message.
+
+
+// === Hover legend ===
 const legend = document.createElement('div');
 legend.style.position = 'absolute';
 legend.style.left = '12px';
@@ -206,6 +282,7 @@ chart.subscribeCrosshairMove(param => {
         legend.innerHTML = 'Hover a candle…';
         return;
     }
+
     const candle = param.seriesData.get(candlestickSeries);
     const sma5 = param.seriesData.get(sma5Line);
     const sma20 = param.seriesData.get(sma20Line);
@@ -217,7 +294,44 @@ chart.subscribeCrosshairMove(param => {
             O: ${candle.open?.toFixed(2)} H: ${candle.high?.toFixed(2)}<br>
             L: ${candle.low?.toFixed(2)} C: ${candle.close?.toFixed(2)}<br>
             <span style="color:blue">SMA5:</span> ${sma5?.value?.toFixed(2) ?? '–'} &nbsp;
-            <span style="color:gold">SMA20:</span> ${sma20?.value?.toFixed(2) ?? '–'}
+            <span style="color:gold">SMA20:</span> ${sma20?.value?.toFixed(2) ?? '–'}<br>
+        `;
+    }
+});
+
+// === RSI hover legend ===
+const rsiLegend = document.createElement('div');
+rsiLegend.style.position = 'absolute';
+rsiLegend.style.left = '12px';
+rsiLegend.style.top = '8px';
+rsiLegend.style.zIndex = 10;
+rsiLegend.style.color = isDarkMode ? '#f3f4f6' : '#111827';
+rsiLegend.style.fontFamily = 'Inter, sans-serif';
+rsiLegend.style.fontSize = '12px';
+rsiLegend.style.backgroundColor = isDarkMode ? 'rgba(17,24,39,0.8)' : 'rgba(255,255,255,0.8)';
+rsiLegend.style.padding = '6px 10px';
+rsiLegend.style.borderRadius = '8px';
+rsiLegend.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
+rsiLegend.innerHTML = 'Hover RSI…';
+document.getElementById('rsiChart').appendChild(rsiLegend);
+
+rsiChart.subscribeCrosshairMove(param => {
+    if (!param.time) {
+        rsiLegend.innerHTML = 'Hover RSI…';
+        return;
+    }
+
+    const rsi = param.seriesData.get(rsiLine);
+    const rsiAvg = param.seriesData.get(rsiAvgLine);
+    const rsiPeriod = document.getElementById('rsiPeriod')?.value || 9;
+    const rsiAvgLen = document.getElementById('rsiAvg')?.value || 3;
+    const date = new Date(param.time * 1000).toLocaleString('en-GB', { timeZone: 'UTC' });
+
+    if (rsi && rsiAvg) {
+        rsiLegend.innerHTML = `
+            <b>${date}</b><br>
+            <span style="color:green">RSI(${rsiPeriod}):</span> ${rsi.value?.toFixed(2) ?? '–'} &nbsp;
+            <span style="color:red">Avg(${rsiAvgLen}):</span> ${rsiAvg.value?.toFixed(2) ?? '–'}
         `;
     }
 });
@@ -242,13 +356,17 @@ if (themeToggle) {
     });
 }
 
-// === Wire UI controls: Fetch button + Interval select ===
+// === Wire UI controls ===
 const fetchBtn = document.getElementById('fetchData');
-if (fetchBtn) {
-    fetchBtn.addEventListener('click', () => loadNiftyData());
-}
+if (fetchBtn) fetchBtn.addEventListener('click', () => loadNiftyData());
 
 const intervalSelect = document.getElementById('intervalSelect');
-if (intervalSelect) {
-    intervalSelect.addEventListener('change', () => loadNiftyData());
-}
+if (intervalSelect) intervalSelect.addEventListener('change', () => loadNiftyData());
+
+const applyRsi = document.getElementById('applyRsi');
+if (applyRsi) applyRsi.addEventListener('click', () => loadNiftyData());
+
+// === Initial load ===
+window.addEventListener('load', () => {
+    loadNiftyData();
+});
